@@ -2,6 +2,8 @@
 
 [![License: GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue.svg)](LICENSE)
 
+**Watch it:** [Speak37 on YouTube](https://youtu.be/JkLWlMOAvNA) · **Install it:** <https://genkigenki.github.io/smk37/>
+
 **Speech, played musically, on the M-Vave SMK-37 (SMK-37 Pro, Elite, MKE-P37) and the FM-1.** A speech synthesizer
 in the style of the Speak & Spell: every key speaks the next word of a sentence, at the key's pitch. Pick a joke on
 a pad and play it as a melody, a word a key; play a chord and the word comes out in harmony. Sing folk songs a word a key and the

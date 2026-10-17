@@ -4,6 +4,8 @@
 
 [![License: GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue.svg)](LICENSE)
 
+The "37" is where it started, the SMK-37; Speak37 runs on the FM-1 too.
+
 **Watch it:** [Speak37 on YouTube](https://youtu.be/JkLWlMOAvNA) · **Install it:** <https://genkigenki.github.io/smk37/>
 
 **Speech, played musically, on the M-Vave SMK-37 (SMK-37 Pro, Elite, MKE-P37) and the FM-1.** A speech synthesizer

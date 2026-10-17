@@ -1,0 +1,26 @@
+MIT License
+
+Copyright (c) 2020 Electrosmith, Corp, Emilie Gillet; 2026 M-VAVE (珠海笙科智能科技有限公司).
+Fixed-point port (firmware/src/sp_808.c, firmware/src/sp_808_tab.h): Copyright (c) 2026 M. Geisler (genkigenki/makkuro).
+
+The 808 drum voices of FM1 Open (https://github.com/m-vave/fm1_open, third_party/synth/drum808.c,
+commit 5d3eac2573dbd054254fabda6fde099adc594348), a DaisySP (https://github.com/electro-smith/DaisySP) /
+Plaits adaptation.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

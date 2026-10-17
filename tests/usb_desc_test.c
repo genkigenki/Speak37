@@ -1,0 +1,394 @@
+/* SPDX-License-Identifier: GPL-3.0-only
+ * Copyright (C) 2026 Leo Kuroshita (@kurogedelic), Hügelton Instruments */
+/* Host test of the USB descriptor layouts in src/usb.c (#67), one build per variant:
+ *   -DT_CDC=0/1 (FELUCCA_CDC)  -DT_UAC=0/1 (FELUCCA_UAC)  -DT_LAYOUT=0..3 (FELUCCA_USB_LAYOUT)
+ *   -DT_ON=0/1 (usb_cdc_on: the console presented or not)  -DT_48K=0/1 (FELUCCA_UAC_48K, default 1)
+ *   -DT_ASF=0/1 (FELUCCA_UAC_AS_FIRST, default 1: the audio streaming interface first in the AC collection)
+ * The device and configuration descriptors come from get_desc(), as GET_DESCRIPTOR sends them, and are
+ * parsed as a host does: lengths and wTotalLength, bNumInterfaces, interface numbers 0..n-1 in order, the
+ * endpoints of each setting and their addresses (EP1 MIDI, EP2 / EP3 CDC, EP4 audio, each once), the IADs
+ * (in front of their first interface, contiguous, the function's class, no interface in two), the AC
+ * header's collection (the MIDI and audio streaming interfaces), the CDC union / call management (the data
+ * interface), the device class of the layout, bcdDevice. Layout 0 and the console left out must equal the
+ * 1.0 descriptors (tests/usb_desc_v10.h): byte for byte without FELUCCA_UAC_48K, and with it (1.1) exactly 1.0
+ * plus the 48 kHz changes (v11_from_v10: the type I format lists 44100 and 48000, EP 0x84 takes 49 frames,
+ * wTotalLength + 3, bcdDevice + 0.10), and with FELUCCA_UAC_AS_FIRST (1.5.1) the AC collection's two interfaces
+ * swapped and bcdDevice + 0.08, nothing else. The AC collection against a model of the kernel AppleUSBAudio
+ * parser of macOS up to 15 (#67: it must reach the audio streaming interface). Last, the device descriptor against the IOUSBHostDevice
+ * personalities of macOS 27.2's AppleUSBCDC / AppleUSBAudio / AppleUSBHostCompositeDevice (the same on the
+ * #67 reporter's macOS 15): which composite drivers may take the device. And the update path, with the console
+ * presented or not (MENU > USB SERIAL OFF): the soft key, the M-UPGRADE command and a SysEx frame (the installer's,
+ * the editor's) arrive through EP1 OUT (ep1_take, as usb_poll hands it the packet), on the MIDI interface alone. */
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#define RING_PUBLISH() __asm__ volatile("" ::: "memory")
+#define HALF_FRAMES 128
+#define FELUCCA_OTA 1                                    /* (the M-UPGRADE / editor SysEx frames: the update path) */
+#define FELUCCA_CDC T_CDC
+#define FELUCCA_UAC T_UAC
+#define FELUCCA_USB_LAYOUT T_LAYOUT
+#define FELUCCA_CDC_DEFAULT T_ON
+#ifndef T_48K
+#define T_48K 1
+#endif
+#define FELUCCA_UAC_48K T_48K
+#ifndef T_ASF
+#define T_ASF 1
+#endif
+#define FELUCCA_UAC_AS_FIRST T_ASF
+static void fm1_delay_ms(uint32_t ms) { (void)ms; }
+#pragma GCC diagnostic ignored "-Wint-to-pointer-cast"   /* SIE register macros (never touched here) */
+#include "../firmware/src/usb.c"
+#include "usb_desc_v10.h"
+static uint32_t ota_now_ms(void) { return 0; }
+static void ota_idle(void) {}
+
+static int fails;
+static void check(const char *what, int ok)
+{
+    printf("%-72s %s\n", what, ok ? "ok" : "FAIL");
+    if (!ok)
+        fails++;
+}
+
+static uint32_t le16(const uint8_t *p) { return p[0] | (uint32_t)p[1] << 8; }
+
+#define CDC_SHOWN (T_CDC && T_ON)
+#define AUDIO_48K (T_UAC && T_48K)
+#define AS_FIRST (T_UAC && T_ASF)
+#define BCD_EXPECT (0x300u + 0x10 * (T_UAC + AUDIO_48K) + 0x08 * AS_FIRST + (CDC_SHOWN ? 1 + 2 * T_LAYOUT : 0))
+
+/* AppleUSBAudio-273.4.1 AUAConfigurationDictionary::parseConfigurationDescriptor (the kernel USB audio driver of
+ * macOS up to 15), reduced to its walk of the AC collection: the list of baInterfaceNr is walked with the count
+ * bInCollection; at a MIDI streaming interface the matching entry is removed from the list while the walk goes
+ * on (index + 1), at an audio streaming interface the walk stops at the match. A look-up past the end of the
+ * (shortened) list fails (FailIf -> Exit) and the parse ends there. 1: the audio streaming interface is parsed. */
+static int aua_parses_as(const uint8_t *c, uint32_t n)
+{
+    uint8_t list[8], len = 0, num = 0;
+    uint32_t off, i, k;
+    int have_ac = 0;
+    for (off = 0; off < n && c[off] >= 2; off += c[off]) {
+        const uint8_t *d = c + off;
+        if (d[1] == 4 && d[5] == 1 && d[6] == 1)
+            have_ac = 2;                               /* the AC interface: its header follows */
+        else if (d[1] == 0x24 && d[2] == 1 && have_ac == 2) {
+            num = d[7];
+            for (len = 0; len < num && len < sizeof list; len++)
+                list[len] = d[8 + len];
+            have_ac = 1;
+        } else if (d[1] == 4 && d[5] == 1 && d[6] == 3) {    /* MIDI streaming: pruned from the list */
+            for (i = 0; i < num; i++) {
+                if (i >= len)
+                    return 0;                          /* getObject (i) == NULL: FailIf, Exit */
+                if (list[i] == d[2]) {
+                    for (k = i; k + 1 < len; k++)
+                        list[k] = list[k + 1];
+                    len--;
+                }
+            }
+        } else if (d[1] == 4 && d[5] == 1 && d[6] == 2 && have_ac == 1) {   /* audio streaming */
+            for (i = 0; i < num; i++) {
+                if (i >= len)
+                    return 0;
+                if (list[i] == d[2])
+                    return 1;                          /* found: parseASInterfaceDescriptor */
+            }
+        }
+    }
+    return 0;
+}
+
+/* the 1.0 descriptors with 1.1's 48 kHz changes, nothing else: the format descriptor 11 -> 14 bytes
+ * (bSamFreqType 2: 44100, 48000), EP 0x84's wMaxPacketSize 184 -> 196, wTotalLength + 3, bcdDevice x.1x -> x.2x */
+static uint8_t v11_dev[18], v11_cfg[512];
+static uint32_t v11_from_v10(const uint8_t *dev, const uint8_t *cfg, uint32_t n)
+{
+    uint32_t off, o = 0, as = 0;
+    memcpy(v11_dev, dev, 18);
+    v11_dev[12] = (uint8_t)(v11_dev[12] + 0x10);
+    for (off = 0; off < n; off += cfg[off]) {
+        const uint8_t *d = cfg + off;
+        if (d[1] == 4)
+            as = d[5] == 1 && d[6] == 2;
+        if (as && d[1] == 0x24 && d[2] == 2 && d[0] == 11 && d[7] == 1) {
+            static const uint8_t F[14] = {14, 0x24, 2, 1, 2, 2, 16, 2, 0x44, 0xAC, 0x00, 0x80, 0xBB, 0x00};
+            memcpy(v11_cfg + o, F, 14);
+            o += 14;
+            continue;
+        }
+        memcpy(v11_cfg + o, d, d[0]);
+        if (d[1] == 5 && d[2] == 0x84) {
+            v11_cfg[o + 4] = 196;
+            v11_cfg[o + 5] = 0;
+        }
+        o += d[0];
+    }
+    v11_cfg[2] = (uint8_t)o;
+    v11_cfg[3] = (uint8_t)(o >> 8);
+    return o;
+}
+
+/* dev / cfg against the 1.0 reference: equal, or (48 kHz) equal to it with the 1.1 changes */
+static int same_as(const uint8_t *dev, const uint8_t *c, uint32_t n, const uint8_t *rdev, const uint8_t *rcfg,
+                   uint32_t rn)
+{
+    uint32_t off;
+    if (AUDIO_48K) {
+        rn = v11_from_v10(rdev, rcfg, rn);
+    } else {
+        memcpy(v11_dev, rdev, 18);
+        memcpy(v11_cfg, rcfg, rn);
+    }
+    if (AS_FIRST) {                                    /* 1.5.1: the AC collection swapped, bcdDevice + 0.08 */
+        v11_dev[12] = (uint8_t)(v11_dev[12] + 0x08);
+        for (off = 0; off < rn; off += v11_cfg[off])
+            if (v11_cfg[off + 1] == 0x24 && v11_cfg[off + 2] == 1 && v11_cfg[off] == 10 && v11_cfg[off + 7] == 2) {
+                uint8_t t = v11_cfg[off + 8];
+                v11_cfg[off + 8] = v11_cfg[off + 9];
+                v11_cfg[off + 9] = t;
+                break;
+            }
+    }
+    return !memcmp(dev, v11_dev, 18) && n == rn && !memcmp(c, v11_cfg, n);
+}
+
+int main(void)
+{
+    const uint8_t *dev, *c;
+    uint16_t dev_len, n;
+    uint32_t off, i, nif = 0, niad = 0, eps_n = 0;
+    int lens_ok = 1, order_ok = 1, eps_ok = 1, iad_ok = 1, dup_ok = 1, ac_ok = 0, union_ok = !CDC_SHOWN;
+    int cm_ok = !CDC_SHOWN, coll_ok = 0;
+    int cur_if = -1, cur_neps = 0, got = 0, iad_next = -1, iad_cls = 0, iad_sub = 0;
+    uint8_t if_class[16], if_sub[16], in_iad[16], seen[16], coll[4], ncoll = 0, eps[16];
+    int aud_if = -1, midi_if = -1, as_if = -1, comm_if = -1, data_if = -1;
+    char name[128];
+
+    memset(if_class, 0, sizeof if_class);
+    memset(if_sub, 0, sizeof if_sub);
+    memset(in_iad, 0, sizeof in_iad);
+    memset(seen, 0, sizeof seen);
+    printf("-- USB descriptors: CDC %d (%s), UAC %d%s%s, layout %d\n", T_CDC,
+           !T_CDC ? "not built" : T_ON ? "presented" : "left out", T_UAC, AUDIO_48K ? " (44.1 / 48 kHz)" : "",
+           T_UAC ? (AS_FIRST ? ", AS first" : ", MIDI first") : "", T_LAYOUT);
+    check("GET_DESCRIPTOR device", get_desc(0x0100, &dev, &dev_len) && dev_len == 18 && dev[0] == 18 && dev[1] == 1);
+    check("GET_DESCRIPTOR configuration", get_desc(0x0200, &c, &n) && c[1] == 2);
+
+    /* ---- the device ---- */
+    if (!CDC_SHOWN)
+        check("no console: bcdUSB 1.10, class 00 00 00", le16(dev + 2) == 0x0110 && !dev[4] && !dev[5] && !dev[6]);
+    else if (T_LAYOUT <= 1)
+        check("misc / IAD: bcdUSB 2.00, class EF 02 01", le16(dev + 2) == 0x0200 && dev[4] == 0xEF && dev[5] == 2 &&
+              dev[6] == 1);
+    else
+        check(T_LAYOUT == 2 ? "bcdUSB 2.00, class 00 00 01" : "bcdUSB 2.00, class 00 00 00",
+              le16(dev + 2) == 0x0200 && !dev[4] && !dev[5] && dev[6] == (T_LAYOUT == 2));
+    check("VID 1209 PID 0001, strings 1 2, one configuration",
+          le16(dev + 8) == 0x1209 && le16(dev + 10) == 1 && dev[14] == 1 && dev[15] == 2 && dev[17] == 1);
+    snprintf(name, sizeof name, "bcdDevice 3.%02X", BCD_EXPECT & 0xFFu);
+    check(name, le16(dev + 12) == BCD_EXPECT);
+
+    /* ---- the configuration, walked as a host does ---- */
+    check("wTotalLength = the bytes sent", le16(c + 2) == n);
+    for (off = 0; off < n;) {
+        const uint8_t *d = c + off;
+        if (d[0] < 2 || off + d[0] > n) {
+            lens_ok = 0;
+            break;
+        }
+        switch (d[1]) {
+        case 0x0B:                                     /* IAD: must come right before its first interface */
+            niad++;
+            if (d[0] != 8 || iad_next >= 0 || d[3] < 2 || d[2] + d[3] > 16)
+                iad_ok = 0;
+            iad_next = d[2];
+            iad_cls = d[4];
+            iad_sub = d[5];
+            for (i = d[2]; i < (uint32_t)d[2] + d[3] && i < 16; i++) {
+                if (in_iad[i])
+                    iad_ok = 0;                        /* an interface in two functions */
+                in_iad[i] = (uint8_t)(niad);
+            }
+            if (!((d[4] == 1 && d[5] == 1 && d[6] == 0) || (d[4] == 2 && d[5] == 2 && d[6] == 1)))
+                iad_ok = 0;                            /* audio 01 01 00 or CDC ACM 02 02 01 */
+            break;
+        case 4:
+            if (cur_if >= 0 && got != cur_neps)
+                eps_ok = 0;
+            if (d[2] >= 16) {
+                order_ok = 0;
+                break;
+            }
+            if (iad_next >= 0) {                       /* the function's class is its first interface's */
+                if (d[2] != iad_next || d[3] != 0 || d[5] != iad_cls || d[6] != iad_sub)
+                    iad_ok = 0;
+                iad_next = -1;
+            }
+            if (!seen[d[2]]) {                         /* first setting of a new interface: the next number */
+                if (d[2] != nif || d[3] != 0)
+                    order_ok = 0;
+                seen[d[2]] = 1;
+                nif++;
+                if_class[d[2]] = d[5];
+                if_sub[d[2]] = d[6];
+            } else if (d[2] != cur_if) {
+                order_ok = 0;                          /* alternate settings follow their interface */
+            }
+            cur_if = d[2];
+            cur_neps = d[4];
+            got = 0;
+            if (d[5] == 1 && d[6] == 1)
+                aud_if = d[2];
+            if (d[5] == 1 && d[6] == 3)
+                midi_if = d[2];
+            if (d[5] == 1 && d[6] == 2)
+                as_if = d[2];
+            if (d[5] == 2 && d[6] == 2)
+                comm_if = d[2];
+            if (d[5] == 10)
+                data_if = d[2];
+            break;
+        case 5:
+            got++;
+            if (eps_n < sizeof eps)
+                eps[eps_n++] = d[2];
+            for (i = 0; i + 1 < eps_n; i++)
+                if (eps[i] == d[2])
+                    dup_ok = 0;
+            if ((d[2] == 0x01 || d[2] == 0x81) && !(d[3] == 2 && cur_if == midi_if))
+                eps_ok = 0;
+            if (d[2] == 0x84 && !(d[3] == 5 && cur_if == as_if))
+                eps_ok = 0;
+            if (d[2] == 0x82 && !(d[3] == 3 && cur_if == comm_if))
+                eps_ok = 0;
+            if ((d[2] == 0x03 || d[2] == 0x83) && !(d[3] == 2 && cur_if == data_if))
+                eps_ok = 0;
+            break;
+        case 0x24:
+            if (cur_if == aud_if && d[2] == 1) {       /* AC header */
+                ac_ok = le16(d + 3) == 0x0100 && d[0] == 8u + d[7];
+                ncoll = d[7];
+                for (i = 0; i < ncoll && i < sizeof coll; i++)
+                    coll[i] = d[8 + i];
+            }
+            if (cur_if == comm_if && d[2] == 0x06)     /* union: this interface + the data one */
+                union_ok = d[0] == 5 && d[3] == comm_if && d[4] == comm_if + 1;
+            if (cur_if == comm_if && d[2] == 0x01)     /* call management: the data interface */
+                cm_ok = d[0] == 5 && d[4] == comm_if + 1;
+            break;
+        }
+        off += d[0];
+    }
+    if (cur_if >= 0 && got != cur_neps)
+        eps_ok = 0;
+    if (AS_FIRST)                                      /* 1.5.1 (#67): audio streaming, then MIDI */
+        coll_ok = ncoll == 2 && coll[0] == as_if && coll[1] == midi_if;
+    else
+        coll_ok = ncoll == 1 + T_UAC && coll[0] == midi_if && (!T_UAC || coll[1] == as_if);
+
+    check("descriptor lengths add up to wTotalLength", lens_ok && off == n);
+    snprintf(name, sizeof name, "bNumInterfaces %u = the interfaces, numbered 0..n-1 in order", (unsigned)c[4]);
+    check(name, order_ok && c[4] == nif && nif == 2u + T_UAC + 2u * CDC_SHOWN);
+    check("each setting has bNumEndpoints endpoints, each on its interface", eps_ok);
+    snprintf(name, sizeof name, "endpoint addresses unique (%u: MIDI 01 81%s%s)", (unsigned)eps_n,
+             CDC_SHOWN ? ", CDC 82 03 83" : "", T_UAC ? ", audio 84" : "");
+    check(name, dup_ok && eps_n == 2u + 3u * CDC_SHOWN + T_UAC);
+    if (CDC_SHOWN) {
+        snprintf(name, sizeof name, "IADs: audio IF %d-%d, CDC IF %d-%d, before their first interface", aud_if,
+                 aud_if + 1 + T_UAC, comm_if, comm_if + 1);
+        check(name, iad_ok && niad == 2 && in_iad[aud_if] && in_iad[midi_if] == in_iad[aud_if] &&
+                        (!T_UAC || in_iad[as_if] == in_iad[aud_if]) && in_iad[comm_if] &&
+                        in_iad[data_if] == in_iad[comm_if] && in_iad[comm_if] != in_iad[aud_if]);
+        check(T_LAYOUT == 1 ? "CDC first: IF 0-1, audio from IF 2" : "audio from IF 0, CDC last",
+              T_LAYOUT == 1 ? comm_if == 0 && aud_if == 2 : aud_if == 0 && comm_if == 2 + T_UAC);
+    } else {
+        check("no IAD, audio from IF 0", niad == 0 && aud_if == 0);
+    }
+    check("audio function: AC, MIDI, AS in a row", midi_if == aud_if + 1 && (!T_UAC || as_if == aud_if + 2));
+    check(AS_FIRST ? "AC header 1.00, collection = the audio streaming, then the MIDI interface"
+                   : "AC header 1.00, collection = the MIDI (and audio streaming) interfaces", ac_ok && coll_ok);
+    if (T_UAC)                                         /* #67: macOS 10.14 .. 15 (kernel AppleUSBAudio) */
+        check(AS_FIRST ? "AppleUSBAudio (macOS <= 15) parser model reaches the audio streaming interface"
+                       : "AppleUSBAudio (macOS <= 15) parser model stops before it (1.0 .. 1.5, #67)",
+              aua_parses_as(c, n) == AS_FIRST);
+    check("UAC_AS_IF (SET_INTERFACE / GET_INTERFACE) = the audio streaming interface",
+          !T_UAC || (int)UAC_AS_IF == as_if);
+    check("CDC union and call management name the data interface", union_ok && cm_ok &&
+          (!CDC_SHOWN || (data_if == comm_if + 1 && if_class[data_if] == 10)));
+
+    /* ---- the released bytes ---- */
+    if (CDC_SHOWN && T_LAYOUT == 0)
+        check(AS_FIRST    ? "layout 0 = Felucca 1.0 + the 48 kHz rate (if built) + the AC collection order, nothing else"
+              : AUDIO_48K ? "layout 0 = Felucca 1.0 + the 48 kHz rate (format, EP 0x84 size, bcdDevice), nothing else"
+                          : "layout 0 = Felucca 1.0 byte for byte",
+              T_UAC ? same_as(dev, c, n, V10_CDC_DEV, V10_CDC_CFG, sizeof V10_CDC_CFG)
+                    : same_as(dev, c, n, V10_CDC_NOUAC_DEV, V10_CDC_NOUAC_CFG, sizeof V10_CDC_NOUAC_CFG));
+    if (!CDC_SHOWN)
+        check(AS_FIRST    ? "without the console = 1.0's FELUCCA_CDC=0 build + 48 kHz (if built) + the AC order"
+              : AUDIO_48K ? "without the console = 1.0's FELUCCA_CDC=0 build + the 48 kHz rate, nothing else"
+                          : "without the console = a FELUCCA_CDC=0 build of 1.0 byte for byte",
+              T_UAC ? same_as(dev, c, n, V10_NOCDC_DEV, V10_NOCDC_CFG, sizeof V10_NOCDC_CFG)
+                    : same_as(dev, c, n, V10_MIDI_DEV, V10_MIDI_CFG, sizeof V10_MIDI_CFG));
+    if (T_UAC) {                                       /* the audio streaming format, as a host lists the rates */
+        uint32_t rates = 0, r0 = 0, r1 = 0, maxp = 0, as = 0;
+        for (off = 0; off < n; off += c[off]) {
+            const uint8_t *d = c + off;
+            if (d[1] == 4)
+                as = d[5] == 1 && d[6] == 2;
+            if (as && d[1] == 0x24 && d[2] == 2 && d[0] == 8u + 3u * d[7]) {
+                rates = d[7];
+                r0 = d[8] | d[9] << 8 | (uint32_t)d[10] << 16;
+                r1 = rates > 1 ? d[11] | d[12] << 8 | (uint32_t)d[13] << 16 : 0;
+            }
+            if (d[1] == 5 && d[2] == 0x84)
+                maxp = le16(d + 4);
+        }
+        snprintf(name, sizeof name, "audio input: %u rate(s) %u%s, EP 0x84 %u B", rates, r0, rates > 1 ? " 48000" : "",
+                 maxp);
+        check(name, AUDIO_48K ? rates == 2 && r0 == 44100 && r1 == 48000 && maxp == 196
+                              : rates == 1 && r0 == 44100 && maxp == 184);
+    }
+
+    /* ---- macOS: the IOUSBHostDevice personalities (macOS 27.2 kext Info.plists; -1 = "*") ---- */
+    {
+        static const struct { const char *drv; int cls, sub, proto; } P[] = {
+            {"AppleUSBCDCCompositeDevice (CDCCompositeDevice)", 2, -1, -1},
+            {"AppleUSBCDCCompositeDevice (Misc)", 0xEF, 2, 1},
+            {"AppleUSBCDCCompositeDevice (Vendor)", 0, 0, 0},
+            {"AppleUSBAudioComposite", 0, 0, -1},
+            {"AppleUSBAudioComposite (InterfaceAssociationClass)", 0xEF, 2, 1},
+            {"AppleUSBHostCompositeDevice", 0, 0, -1},
+            {"AppleUSBHostCompositeDevice (InterfaceAssociationClass)", 0xEF, 2, 1},
+        };
+        int cdc_drv = 0;
+        for (i = 0; i < sizeof P / sizeof P[0]; i++) {
+            int m = P[i].cls == dev[4] && (P[i].sub < 0 || P[i].sub == dev[5]) &&
+                    (P[i].proto < 0 || P[i].proto == dev[6]);
+            if (m) {
+                printf("   macOS may attach: %s\n", P[i].drv);
+                cdc_drv |= i < 3;
+            }
+        }
+        if (CDC_SHOWN && T_LAYOUT == 2)
+            check("layout 2: no AppleUSBCDC device personality matches", !cdc_drv);
+    }
+    /* ---- the update path is USB-MIDI SysEx on EP1: it does not need the console ---- */
+    {
+        static const uint8_t KEY[8] = {0x04, 0xF0, 0x22, 0x24, 0x07, 0x35, 0x7D, 0xF7};   /* F0 22 24 35 7D F7 */
+        static const uint8_t UPG[8] = {0x04, 0xF0, 0x22, 0x24, 0x07, 0x35, 0x7F, 0xF7};   /* F0 22 24 35 7F F7 */
+        static const uint8_t FRM[12] = {0x04, 0xF0, 0x7D, 0x01, 0x04, 0x02, 0x03, 0x04, 0x06, 0x05, 0xF7, 0};
+        const uint8_t *fp;
+        uint32_t fn;
+        int ok = midi_if >= 0 && !usb.uboot_req && !usb.ota_req;
+        ok &= ep1_take(KEY, sizeof KEY) && usb.uboot_req;
+        ok &= ep1_take(UPG, sizeof UPG) && usb.ota_req;
+        ok &= ep1_take(FRM, sizeof FRM) && ota_frame_get(&fp, &fn) && fn == 6u && fp[0] == 0x7D && fp[5] == 0x05;
+        snprintf(name, sizeof name, "update path (SysEx on EP1: soft key, M-UPGRADE, frames), console %s",
+                 CDC_SHOWN ? "presented" : "not presented");
+        check(name, ok);
+    }
+    printf(fails ? "USB DESCRIPTOR TEST FAILED (%d)\n" : "usb_desc: all ok\n", fails);
+    return fails != 0;
+}

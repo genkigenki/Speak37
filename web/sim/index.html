@@ -1,0 +1,340 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: GPL-3.0-only
+     Copyright (C) 2026 M. Geisler (genkigenki/makkuro) -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Speak37 simulator</title>
+<meta name="description" content="Speak37, the talking synth for the M-Vave SMK-37, in the browser: the firmware's own code compiled to WebAssembly.">
+<style>
+  :root { --bg: #06080b; --panel: #0c1016; --or: #ff9a4a; --gr: #7dffb0; --bl: #79b8ff; --pk: #ff7ac8;
+          --dim: #7d8898; --line: #2a3340; --txt: #d7dee8; }
+  * { box-sizing: border-box; }
+  html, body { overflow-x: hidden; }
+  body { margin: 0; background: var(--bg); color: var(--txt); font: 13px/1.35 system-ui, sans-serif;
+         user-select: none; -webkit-user-select: none; touch-action: manipulation; }
+  a { color: var(--bl); }
+  header { padding: 12px 16px 4px; display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline; }
+  header h1 { margin: 0; font-size: 20px; color: var(--or); letter-spacing: 1px; }
+  header h1 span { color: var(--dim); font-weight: 400; font-size: 14px; letter-spacing: 0; }
+  header nav { display: flex; gap: 14px; flex-wrap: wrap; }
+  #status { color: var(--dim); }
+  /* the panel: the SMK-37's arrangement, left to right; the blocks wrap on narrow windows */
+  .smk { margin: 6px 16px; padding: 14px; border: 1px solid var(--line); border-radius: 16px; background: var(--panel);
+         display: flex; flex-direction: column; gap: 16px; }
+  @media (min-width: 1532px) { .smk { max-width: 1500px; margin: 6px auto; } }
+  .top { display: flex; flex-wrap: wrap; gap: 20px; justify-content: space-around; align-items: flex-start; }
+  .blk { display: flex; gap: 12px; align-items: flex-start; }
+  .lab { text-align: center; color: var(--dim); font-size: 11px; font-weight: 600; letter-spacing: .5px; margin-top: 4px; }
+  /* wheels and faders */
+  input.v { writing-mode: vertical-lr; direction: rtl; -webkit-appearance: none; appearance: none; background: transparent;
+            width: 40px; height: 150px; margin: 0; cursor: pointer; touch-action: none; }
+  .faders input.v { height: 104px; }
+  input.v::-webkit-slider-runnable-track { width: 6px; border-radius: 3px; background: #000; border: 1px solid var(--line); }
+  input.v::-moz-range-track { width: 6px; border-radius: 3px; background: #000; border: 1px solid var(--line); }
+  input.v::-webkit-slider-thumb { -webkit-appearance: none; width: 34px; height: 16px; border-radius: 3px; background: #1a212b;
+            border: 2px solid var(--txt); margin-left: -15px; }
+  input.v::-moz-range-thumb { width: 30px; height: 12px; border-radius: 3px; background: #1a212b; border: 2px solid var(--txt); }
+  input.v.w::-webkit-slider-thumb { height: 34px; border-color: var(--or); }
+  input.v.w::-moz-range-thumb { height: 30px; border-color: var(--or); }
+  /* the screen: 240 x 240, scaled by whole pixels */
+  .scr { display: flex; flex-direction: column; gap: 10px; }
+  #screen { width: 240px; height: 240px; image-rendering: pixelated; image-rendering: crisp-edges; display: block;
+            border: 6px solid #000; border-radius: 6px; background: #000; box-sizing: content-box; }
+  @media (min-width: 1900px) { #screen { width: 480px; height: 480px; } }
+  .nav { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  /* buttons */
+  .btn { border: 1.5px solid var(--line); border-radius: 7px; text-align: center; cursor: pointer; color: var(--txt);
+         font-size: 11px; font-weight: 700; padding: 4px 2px; min-height: 40px; background: #12171e; touch-action: none;
+         display: flex; flex-direction: column; justify-content: center; line-height: 1.15; overflow: hidden; }
+  .btn small { display: block; color: var(--dim); font-size: 10px; font-weight: 400; }
+  .btn.lit { border-color: var(--or); color: #fff; background: #3b2210; box-shadow: 0 0 10px #ff9a4a88; }
+  .btn.mope { border-color: #79b8ff88; }
+  .btn.down { background: #26303c; }
+  /* knobs over pads, one column each */
+  .mid { display: grid; grid-template-columns: repeat(8, 70px); row-gap: 10px; }
+  .knob { display: flex; flex-direction: column; align-items: center; gap: 2px; cursor: ns-resize; touch-action: none; }
+  .knob .dial { width: 50px; height: 50px; border-radius: 50%; border: 3px solid #39424f; position: relative;
+                background: radial-gradient(#2a323d, #12171e); }
+  .knob .dial::after { content: ""; position: absolute; left: 50%; top: 3px; width: 3px; height: 16px; margin-left: -1.5px;
+                       background: var(--c); border-radius: 2px; transform-origin: 50% 19px; transform: rotate(var(--a, 0deg)); }
+  .knob b { font-size: 12px; color: var(--c); }
+  .knob small { color: var(--dim); font-size: 10px; text-align: center; }
+  .pad { height: 58px; margin: 0 4px; border-radius: 8px; border: 2px solid #2c3440; cursor: pointer; touch-action: none;
+         background: #000; position: relative; }
+  .pad i { position: absolute; left: 6px; top: 3px; font-style: normal; color: #ffffff99; font-size: 11px; font-weight: 700;
+           text-shadow: 0 0 3px #000; }
+  /* faders over the 2 x 6 buttons */
+  .rgt { display: flex; flex-direction: column; gap: 8px; }
+  .faders { display: flex; justify-content: space-around; }
+  .grid6 { display: grid; grid-template-columns: repeat(6, 64px); gap: 6px; }
+  /* keys */
+  .keys { position: relative; height: 150px; display: flex; touch-action: none; }
+  .key { cursor: pointer; border-radius: 0 0 5px 5px; }
+  .key.w { flex: 1; border: 1px solid #444c58; margin: 0 1px; background: #e9edf2; }
+  .key.b { position: absolute; top: 0; height: 62%; background: #111; border: 1px solid #000; z-index: 2; }
+  .key.down.w { background: var(--or); }
+  .key.down.b { background: #c8661f; }
+  .key.c::after { content: attr(data-n); position: absolute; margin: 128px 0 0 3px; font-size: 9px; color: #6a7380; }
+  .key.c { position: relative; }
+  @media (max-width: 760px) {
+    .smk { padding: 10px; gap: 12px; } .top { gap: 12px; }
+    .blk, .rgt, .mid { width: 100%; } .blk { justify-content: center; }
+    .mid { grid-template-columns: repeat(8, minmax(0, 1fr)); }
+    .knob .dial { width: 32px; height: 32px; border-width: 2px; } .knob .dial::after { height: 10px; transform-origin: 50% 13px; top: 2px; }
+    .knob small { font-size: 9px; } .pad { height: 40px; margin: 0 2px; }
+    .grid6 { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px; } .btn { font-size: 10px; } .btn small { font-size: 9px; }
+    .keys { height: 120px; } .key.c::after { display: none; }
+  }
+  @media (max-width: 420px) { input.v { width: 30px; height: 130px; } .blk { gap: 6px; } .faders input.v { height: 96px; } }
+  #start { position: fixed; inset: 0; background: #000d; display: flex; flex-direction: column; gap: 8px; align-items: center;
+           justify-content: center; font-size: 22px; cursor: pointer; z-index: 10; color: var(--or); text-align: center; padding: 16px; }
+  #start small { color: var(--dim); font-size: 13px; }
+  .help { max-width: 1100px; margin: 8px auto 30px; padding: 0 16px; color: var(--dim); }
+  .help b { color: var(--txt); font-weight: 600; }
+  .help button { background: none; border: 1px solid var(--line); color: var(--dim); border-radius: 5px; cursor: pointer; font: inherit; }
+</style>
+</head>
+<body>
+<header><h1>Speak37 simulator <span>· the firmware's own code in your browser</span></h1>
+  <nav><a href="https://genkigenki.github.io/smk37/#fw-speak37">Speak37 on the SMK-37 site</a>
+    <a href="https://github.com/genkigenki/Speak37">GitHub</a></nav>
+  <span id="status"></span></header>
+<div class="smk">
+  <div class="top">
+    <div class="blk">
+      <div><input class="v w" id="pitch" type="range" min="450" max="630" value="540" aria-label="pitch wheel"><div class="lab">PITCH</div></div>
+      <div><input class="v w" id="mod" type="range" min="0" max="130" value="0" aria-label="mod wheel"><div class="lab">MOD</div></div>
+      <div class="scr"><canvas id="screen" width="240" height="240"></canvas><div class="nav" id="nav"></div></div>
+    </div>
+    <div class="mid" id="mid"></div>
+    <div class="rgt"><div class="faders" id="faders"></div><div class="grid6" id="grid6"></div></div>
+  </div>
+  <div class="keys" id="keys"></div>
+</div>
+<div class="help">
+  <p>Laid out like the SMK-37: the wheels, the screen with its six buttons, K1..K8 over the 16 pads, the faders over the
+  2 x 6 buttons, the keys below. Every key speaks the next word of the sentence at its pitch; a pad picks one of the
+  bank's 16 sentences (K4: the bank, K3: the voice, K2 or KNOB BANK / FADER BANK: the page, K5..K8: the page's four
+  as the screen shows them, K1: MASTER).</p>
+  <p><b>PATCH</b>: MOPE, the gloomy robot. Play it something and it tells you what it thinks; every control talks to it.
+  Pads 1-8 praise it, 9-12 poke it, 13-16 ask for a joke; sometimes it asks for a light game on the pads; bored enough,
+  it plays a sad tune of its own. PATCH again: back. PATCH held: the 16 memories on the pads (a tap loads, held 1 s saves).</p>
+  <p><b>Knobs</b>: drag up / down or the mouse wheel. <b>Keys</b>: lower on a key is louder.
+  <b>Computer keyboard</b>: A W S E D F T G Y H U J K = the keys, Z / X = the octave, 1-8 = the top pads,
+  M = PATCH, arrow keys = &lt; &gt;. A MIDI keyboard plays along (Web MIDI, where the browser has it).
+  The settings, memories and USER sentences are kept in this browser as the unit keeps them in flash
+  <button id="forget">forget them</button>.</p>
+  <p>The simulator runs the firmware's C sources (the speech, the drums, MOPE, the screen) compiled to WebAssembly,
+  in fixed point as on the keyboard, at its sample rate (44118 Hz). It is not an installer: the firmware itself is on the
+  <a href="https://genkigenki.github.io/smk37/#fw-speak37">site</a>. GPL-3.0, sources in
+  <a href="https://github.com/genkigenki/Speak37">genkigenki/Speak37</a> (web/sim).</p>
+</div>
+<div id="start">Click to start sound<small>(browsers need a click before they play)</small></div>
+<script>
+const $ = (id) => document.getElementById(id);
+let node = null;
+const send = (m) => node && node.port.postMessage(m);
+const cap = (el, ev) => { try { el.setPointerCapture(ev.pointerId); } catch (e) {} };
+const mk = (cls, html) => { const e = document.createElement("div"); e.className = cls; if (html) e.innerHTML = html; return e; };
+
+// ---- the screen
+const ctx = $("screen").getContext("2d"), img = ctx.createImageData(240, 240);
+function drawFb(fb) {
+  const d = img.data;
+  for (let i = 0; i < 240 * 240; i++) {
+    const c = fb[i];
+    d[4 * i] = (c >> 11) << 3 | c >> 13; d[4 * i + 1] = ((c >> 5) & 63) << 2 | ((c >> 9) & 3); d[4 * i + 2] = (c & 31) << 3 | ((c >> 2) & 7); d[4 * i + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+}
+function fitScreen() {   // whole-pixel scale: 1x, 2x where the window has room
+  const s = $("screen"), w = innerWidth;
+  const k = w >= 1900 ? 2 : 1;
+  s.style.width = s.style.height = 240 * k + "px";
+}
+addEventListener("resize", fitScreen); fitScreen();
+
+// ---- buttons (the HAL's ids): the SMK's name, what it does in Speak37
+const BTN = [["KNOB BANK", "next page"], ["FADER BANK", "page before"], ["<", "word before"], [">", "next word"],
+  ["OCTAVE-", "octave"], ["OCTAVE+", "octave"], ["ARP", "HOLD"], ["NOTE REPEAT", "REPEAT"], ["SCALE", "LETTERS · KIT"],
+  ["CHORD", "CHORD"], ["GLOBE", "SETUP"], ["BT", "-"], ["PATCH", "MOPE · held: memories"],
+  ["PARA", "FILL"], ["FX", "DELAY · SPACE"], ["SEQ", "RHYTHM"], ["SEQ PLAY", "PLAY"], ["SEQ REC", "from the start"]];
+const btnEl = [];
+function button(b, parent) {
+  const el = mk("btn" + (b === 12 ? " mope" : ""), `${BTN[b][0]}<small>${BTN[b][1]}</small>`);
+  let down = false;
+  const up = () => { if (!down) return; down = false; el.classList.remove("down"); send({ type: "button", b, down: 0 }); };
+  el.addEventListener("pointerdown", (ev) => { cap(el, ev); down = true; el.classList.add("down"); send({ type: "button", b, down: 1 }); });
+  el.addEventListener("pointerup", up); el.addEventListener("pointercancel", up); el.addEventListener("lostpointercapture", up);
+  btnEl[b] = el;
+  parent.appendChild(el);
+}
+[0, 1, 2, 3, 4, 5].forEach((b) => button(b, $("nav")));                  // under the screen, 2 x 3
+[6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17].forEach((b) => button(b, $("grid6")));   // under the faders, 2 x 6
+function tapButton(b, d) { btnEl[b].classList.toggle("down", !!d); send({ type: "button", b, down: d }); }
+
+// ---- knobs K1..K8 (HAL encoders 0..7)
+const KN = ["MASTER", "PAGE", "VOICE", "BANK", "page 1", "page 2", "page 3", "page 4"];
+const KC = ["#ff9a4a", "#ff9a4a", "#ff9a4a", "#ff7ac8", "#ff9a4a", "#ff9a4a", "#ff9a4a", "#ff9a4a"];   // (as the screen's cells)
+for (let e = 0; e < 8; e++) {
+  const k = mk("knob", `<div class="dial"></div><b>K${e + 1}</b><small>${KN[e]}</small>`);
+  k.style.setProperty("--c", KC[e]);
+  let ang = 0, y0 = null, acc = 0;
+  const turn = (s) => { if (!s) return; ang += s * 15; k.firstChild.style.setProperty("--a", ang + "deg"); send({ type: "enc", e, steps: s }); };
+  k.addEventListener("pointerdown", (ev) => { y0 = ev.clientY; acc = 0; cap(k, ev); });
+  k.addEventListener("pointermove", (ev) => { if (y0 === null) return; acc += y0 - ev.clientY; y0 = ev.clientY;
+    const s = Math.trunc(acc / 10); if (s) { acc -= s * 10; turn(s); } });
+  const end = () => { y0 = null; };
+  k.addEventListener("pointerup", end); k.addEventListener("pointercancel", end);
+  k.addEventListener("wheel", (ev) => { ev.preventDefault(); turn(ev.deltaY < 0 ? 1 : -1); }, { passive: false });
+  $("mid").appendChild(k);
+}
+
+// ---- pads: 0..7 the top row, 8..15 the bottom row
+const padEl = [];
+for (let p = 0; p < 16; p++) {
+  const el = mk("pad", `<i>${p + 1}</i>`);
+  let down = false;
+  const up = () => { if (!down) return; down = false; send({ type: "pad", pad: p, vel: 0 }); };
+  el.addEventListener("pointerdown", (ev) => {
+    cap(el, ev); down = true;
+    const r = el.getBoundingClientRect(), y = Math.min(1, Math.max(0, (ev.clientY - r.top) / r.height));
+    send({ type: "pad", pad: p, vel: Math.round(50 + 77 * y) });   // (lower on the pad: harder, KIT's hits by it)
+  });
+  el.addEventListener("pointerup", up); el.addEventListener("pointercancel", up); el.addEventListener("lostpointercapture", up);
+  padEl[p] = el;
+  $("mid").appendChild(el);
+}
+
+// ---- faders: SPEED, FORMANT, DELAY, REVERB (each takes over once moved, as on the unit)
+const FN = ["SPEED", "FORMANT", "DELAY", "REVERB"];
+for (let i = 0; i < 4; i++) {
+  const d = mk("", `<input class="v" type="range" min="0" max="127" value="64" aria-label="${FN[i]}"><div class="lab">${FN[i]}</div>`);
+  d.firstChild.addEventListener("input", (ev) => send({ type: "fader", i, v: +ev.target.value }));
+  $("faders").appendChild(d);
+}
+
+// ---- wheels: pitch springs back to its middle; mod up = more (raw 615 down .. 485 up)
+const pitch = $("pitch");
+let pitchHeld = false, pitchAnim = 0;
+pitch.addEventListener("input", () => send({ type: "wheel", i: 0, raw: +pitch.value }));
+pitch.addEventListener("pointerdown", () => { pitchHeld = true; cancelAnimationFrame(pitchAnim); });
+function pitchHome() {
+  pitchHeld = false;
+  cancelAnimationFrame(pitchAnim);
+  const step = () => {
+    const v = +pitch.value, d = 540 - v;
+    pitch.value = Math.abs(d) < 2 ? 540 : v + d * 0.35;
+    send({ type: "wheel", i: 0, raw: Math.round(+pitch.value) });
+    if (+pitch.value !== 540 && !pitchHeld) pitchAnim = requestAnimationFrame(step);
+  };
+  pitchAnim = requestAnimationFrame(step);
+}
+["change", "pointerup", "pointercancel", "lostpointercapture", "blur"].forEach((e) => pitch.addEventListener(e, () => { if (+pitch.value !== 540) pitchHome(); }));
+addEventListener("pointerup", () => { if (pitchHeld) pitchHome(); });
+$("mod").addEventListener("input", (ev) => send({ type: "wheel", i: 1, raw: 615 - +ev.target.value }));
+
+// ---- keys: 37, C3..C6, across the full width
+const keyEl = [], WHITE = [0, 2, 4, 5, 7, 9, 11];
+let wx = 0;
+for (let k = 0; k < 37; k++) {
+  const white = WHITE.includes(k % 12), el = mk("key " + (white ? "w" : "b") + (k % 12 === 0 ? " c" : ""));
+  if (k % 12 === 0) el.dataset.n = "C" + (3 + k / 12);
+  if (white) wx++;
+  else { el.style.left = (wx / 22 - 0.3 / 22) * 100 + "%"; el.style.width = 0.6 / 22 * 100 + "%"; }
+  let down = false;
+  const up = () => { if (!down) return; down = false; keyDown(k, 0); };
+  el.addEventListener("pointerdown", (ev) => {
+    cap(el, ev); down = true;
+    const r = el.getBoundingClientRect(), y = Math.min(1, Math.max(0, (ev.clientY - r.top) / r.height));
+    keyDown(k, 1, Math.round(55 + 72 * y));                 // (lower on the key: louder)
+  });
+  el.addEventListener("pointerup", up); el.addEventListener("pointercancel", up); el.addEventListener("lostpointercapture", up);
+  keyEl[k] = el;
+  $("keys").appendChild(el);
+}
+function keyDown(k, d, vel) { keyEl[k].classList.toggle("down", !!d); send({ type: "key", key: k, down: d, vel: vel || 100 }); }
+const KB = "awsedftgyhujk", held = {};
+let kbo = 12;
+addEventListener("keydown", (ev) => {
+  if (ev.repeat || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+  const c = ev.key.toLowerCase(), i = KB.indexOf(c);
+  if (held[c] !== undefined) return;
+  if (i >= 0 && kbo + i < 37) { held[c] = ["k", kbo + i]; keyDown(kbo + i, 1, 100); }
+  else if (c === "z") kbo = Math.max(0, kbo - 12);
+  else if (c === "x") kbo = Math.min(24, kbo + 12);
+  else if (c >= "1" && c <= "8") { held[c] = ["p", +c - 1]; send({ type: "pad", pad: +c - 1, vel: 100 }); }
+  else if (c === "m") { held[c] = ["b", 12]; tapButton(12, 1); }
+  else if (c === "arrowleft") { held[c] = ["b", 2]; tapButton(2, 1); ev.preventDefault(); }
+  else if (c === "arrowright") { held[c] = ["b", 3]; tapButton(3, 1); ev.preventDefault(); }
+});
+addEventListener("keyup", (ev) => {
+  const c = ev.key.toLowerCase(), h = held[c];
+  if (h === undefined) return;
+  if (h[0] === "k") keyDown(h[1], 0); else if (h[0] === "p") send({ type: "pad", pad: h[1], vel: 0 }); else tapButton(h[1], 0);
+  delete held[c];
+});
+addEventListener("blur", () => { for (const c of Object.keys(held)) dispatchEvent(new KeyboardEvent("keyup", { key: c })); });
+
+// ---- the store: the firmware's records, kept in this browser
+const SK = "speak37-sim-store", UK = "speak37-sim-user";
+const b64 = (buf) => { let s = ""; for (const x of new Uint8Array(buf)) s += String.fromCharCode(x); return btoa(s); };
+const unb64 = (s) => { const b = atob(s), u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u.buffer; };
+function getStore(k) { try { const s = localStorage.getItem(k); return s ? unb64(s) : null; } catch (e) { return null; } }
+function putStore(k, buf) { try { localStorage.setItem(k, b64(buf)); } catch (e) {} }
+$("forget").addEventListener("click", () => { try { localStorage.removeItem(SK); localStorage.removeItem(UK); } catch (e) {}
+  location.reload(); });
+
+// ---- the device's frames: the pads light like their LEDs
+function frame(m) {
+  if (m.fb) drawFb(m.fb);
+  if (m.pads) for (let p = 0; p < 16; p++) {
+    // the LEDs' levels as the eye takes them (a square root: a dim pad stays dim, but visible)
+    const v = [0, 1, 2].map((j) => Math.round(255 * Math.sqrt(m.pads[3 * p + j] / 255)));
+    const lit = Math.max(...v) > 8, col = `rgb(${v[0]},${v[1]},${v[2]})`;
+    padEl[p].style.background = lit ? col : "#000";
+    padEl[p].style.borderColor = lit ? col : "";
+    padEl[p].style.boxShadow = Math.max(...v) > 150 ? `0 0 14px ${col}` : "";
+  }
+  if (m.leds !== undefined) btnEl.forEach((el, b) => el && el.classList.toggle("lit", !!((m.leds >> b) & 1)));
+  if (m.store) putStore(SK, m.store);
+  if (m.ustore) putStore(UK, m.ustore);
+}
+
+async function start() {
+  $("start").firstChild.textContent = "loading…";
+  try {
+    let ac;
+    try { ac = new AudioContext({ sampleRate: 44118, latencyHint: "interactive" }); }   // (the firmware's rate)
+    catch (e) { ac = new AudioContext({ latencyHint: "interactive" }); }               // (else resampled in the worklet)
+    await ac.audioWorklet.addModule("worklet.js");
+    node = new AudioWorkletNode(ac, "speak37", { numberOfInputs: 0, outputChannelCount: [2] });
+    node.connect(ac.destination);
+    node.port.onmessage = (e) => {
+      const m = e.data;
+      if (m.type === "frame") frame(m);
+      else if (m.type === "ready") {
+        $("start").remove();
+        $("status").textContent = "running · " + ac.sampleRate + " Hz";
+        if (/demo/.test(location.search)) setTimeout(() => { keyDown(12, 1, 100); setTimeout(() => keyDown(12, 0), 700); }, 1500);
+      }
+      else if (m.type === "error") $("start").firstChild.textContent = "error: " + m.message;
+    };
+    const wasm = await (await fetch("sim.wasm")).arrayBuffer();
+    const store = getStore(SK), ustore = getStore(UK), tr = [wasm];
+    node.port.postMessage({ type: "load", wasm, store, ustore, seed: (Math.random() * 4096) | 0 }, tr);
+    await ac.resume();
+    if (navigator.requestMIDIAccess) navigator.requestMIDIAccess().then((ma) => {
+      const hook = () => { for (const i of ma.inputs.values()) i.onmidimessage = (ev) => send({ type: "midi", d: Array.from(ev.data) }); };
+      hook(); ma.onstatechange = hook;
+    }).catch(() => {});
+  } catch (err) { $("start").firstChild.textContent = "error: " + err.message; }
+}
+$("start").addEventListener("click", start, { once: true });
+if (/auto/.test(location.search)) $("start").click();   // (tests: no click needed)
+else if (/view/.test(location.search)) $("start").remove();   // (screenshots: the panel only)
+</script>
+</body>
+</html>

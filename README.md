@@ -44,6 +44,21 @@ One-page reference: [CHEATSHEET.md](CHEATSHEET.md).
 7. SEQ: the RHYTHM page, the pads are 16 drum grooves. Tap BOSSA NOVA, then SEQ PLAY: the words land on the beat.
 8. The last bank, USER: hold a pad 0.6 s and write a sentence of your own.
 
+## Try it in your browser
+
+The [Speak37 simulator](https://genkigenki.github.io/smk37/speak37-sim/) runs the firmware's own C sources (the
+speech, the drums, MOPE, the screen and the SMK-37's panel) compiled to WebAssembly: fixed point as on the keyboard,
+at its sample rate (44118 Hz). Click to start the sound, then play the keys with the mouse, a finger, the computer
+keyboard (A W S E D ... = the keys, Z / X = the octave) or a MIDI keyboard. PATCH wakes MOPE.
+
+Build it yourself (Emscripten):
+
+```
+sh web/sim/build.sh                           # build/sim: index.html, worklet.js, sim.wasm
+node web/sim/sim_test.mjs build/sim/sim.wasm  # the wasm in Node: boots, speaks, MOPE talks, its game, its sulk
+python3 -m http.server -d build/sim 8737      # then open http://localhost:8737
+```
+
 ## The sound
 
 **An LPC speech engine in the style of the TI TMS5220** (the Speak & Spell's family of chips): an excitation (a

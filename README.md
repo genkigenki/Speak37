@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/banner.png" width="100%" alt="Speak37: a talking synth for the SMK-37 and the FM-1, with MOPE the robot on the screen"></p>
+
 # Speak37
 
 [![License: GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue.svg)](LICENSE)
